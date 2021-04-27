@@ -209,7 +209,6 @@ end
 ## Add ########################################################################
 ###############################################################################
 
-
 function new_variable_index(m::MosekModel, matrix_index::MatrixIndex)
     id = create_block(m.x_block, 1)
     push!(m.x_constraints, 0x0)

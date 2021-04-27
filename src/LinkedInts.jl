@@ -350,3 +350,172 @@ function checkconsistency(s::LinkedInts) :: Bool
 
     return true
 end
+
+
+
+
+
+struct IndexLink
+    prev :: Int
+    next :: Int
+end
+
+with_prev(i::IndexLink,prev::Int) = IndexLink(prev,i.next)
+with_next(i::IndexLink,next::Int) = IndexLink(i.prev,next)
+
+mutable struct IndexManager
+    link :: Vector{IndexLink}
+    first_free :: Int
+    last_free  :: Int
+    last_used  :: Int
+    nfree :: Int
+
+    function IndexManager()
+        new(
+            IndexLink[],
+            0,
+            0,
+            0,
+            0)
+    end
+end
+
+function Base.display(self::IndexManager)
+    println("IndexManager {")
+    println("  link = $(self.link)")
+    println("  first_free = $(self.first_free)")
+    println("  last_free  = $(self.last_free)")
+    println("  last_used  = $(self.last_used)")
+    println("  nfree      = $(self.nfree)")
+    println("}")
+end
+function Base.show(io::IO,self::IndexLink)
+    write(io,"<$(self.prev),$(self.next)>")
+end
+
+# Expand to ensure that there are at least N free entries
+#
+# Returns: Number of newly created entries
+function ensurefree(ii :: IndexManager, N :: Int)
+    if ii.nfree < N
+        nadd = N - ii.nfree
+        l = length(ii.link)
+        resize!(ii.link, l+nadd)
+        firstnew = l+1
+        lastnew  = l+nadd
+        ii.nfree += nadd
+
+
+        if ii.last_free > 0
+            ii.link[ii.last_free] = with_next(ii.link[ii.last_free], firstnew)
+        end
+
+        if nadd == 1
+            ii.link[firstnew] = IndexLink(ii.last_free,0)
+        else
+            ii.link[firstnew] = IndexLink(ii.last_free,firstnew+1)
+            ii.link[lastnew]  = IndexLink(lastnew-1,0)
+
+            for i in firstnew+1:lastnew-1
+                ii.link[i] = IndexLink(i-1,i+1)
+            end
+        end
+
+        if ii.last_free > 0
+            ii.last_free = lastnew
+        else
+            ii.last_free = lastnew
+            ii.first_free = firstnew
+        end
+        nadd
+    else
+        0
+    end
+end
+
+# Allocate N entries
+#
+# Returns (M,res)
+# - M is the number of newly created entries
+# - res is the array of allocated indexes
+function allocate(ii :: IndexManager, N :: Int)
+    res = Vector{Int}(undef,N)
+    nadd = ensurefree(ii,N)
+
+    ptrb = ii.first_free
+    ptre  = ptrb
+    res[1] = ptre
+
+    for i in 2:N
+        ptre = ii.link[ptre].next
+        res[i] = ptre
+    end
+
+
+    ii.first_free = ii.link[ptre].next
+    if ii.first_free == 0
+        ii.last_free = 0
+    end
+
+    ii.link[ptrb] = IndexLink(ii.last_used,ii.link[ptrb].next)
+    ii.link[ptre] = IndexLink(ii.link[ptre].prev,0)
+
+    if ii.last_used > 0
+        ii.link[ii.last_used] = IndexLink(ii.link[ii.last_used].prev,ptrb)
+    end
+    ii.last_used = ptre
+
+    ii.nfree -= N
+
+    nadd,res
+end
+
+# Free an index
+function deallocate(ii :: IndexManager, i :: Int)
+    l = ii.link[i]
+    if l.prev > 0
+        ii.link[l.prev] = with_next(ii.link[l.prev],l.next)
+    end
+    if l.next > 0
+        ii.link[l.next] = with_prev(ii.link[l.next],l.prev)
+    end
+    if ii.last_used == i
+        ii.last_used = i.prev
+    end
+    if ii.first_free > 0
+        ii.link[ii.first_free] = with_prev(ii.link[ii.first_free],i)
+    end
+    if ii.last_free == 0
+        ii.last_free = i
+    end
+    ii.link[i] = IndexLink(0,ii.first_free)
+    ii.first_free = i
+    ii.nfree += 1
+end
+
+# Free a list of indexes
+function deallocate(ii :: IndexManager, idxs :: Vector{Int})
+    for i in Iterators.reverse(idxs)
+        deallocate(ii,i)
+    end
+end
+
+# Get the number of entries, used and free
+Base.length(ii :: IndexManager) = length(ii.link)
+
+# function test()
+#     m = IndexManager()
+
+#     display(m)
+#     _,ii1 = allocate(m,3)
+#     display(m)
+#     _,ii2 = allocate(m,3)
+#     display(m)
+#     _,ii3 = allocate(m,3)
+#     println("$ii1, $ii2, $ii3")
+#     deallocate(m,ii2)
+#     display(m)
+#     _,ii4 = allocate(m,Int(4))
+#     display(m)
+#     println("$ii1, $ii3, $ii4")
+# end

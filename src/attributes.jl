@@ -185,6 +185,37 @@ function MOI.get(model::MosekModel,
     # TODO this only works because deletion of PSD constraints is not supported yet
     return length(model.sd_dim)
 end
+
+jump_set_to_mosek(::Type{MOI.Reals}) =                            Mosek.MSK_DOMAIN_R
+jump_set_to_mosek(::Type{MOI.Zeros}) =                            Mosek.MSK_DOMAIN_RZERO
+jump_set_to_mosek(::Type{MOI.Nonnegatives}) =                     Mosek.MSK_DOMAIN_RPLUS
+jump_set_to_mosek(::Type{MOI.Nonpositives}) =                     Mosek.MSK_DOMAIN_RMINUS
+jump_set_to_mosek(::Type{MOI.NormInfinityCone}) =                 Mosek.MSK_DOMAIN_INF_NORM_CONE
+jump_set_to_mosek(::Type{MOI.NormOneCone}) =                      Mosek.MSK_DOMAIN_ONE_NORM_CONE
+jump_set_to_mosek(::Type{MOI.SecondOrderCone}) =                  Mosek.MSK_DOMAIN_QUADRATIC_CONE
+jump_set_to_mosek(::Type{MOI.RotatedSecondOrderCone}) =           Mosek.MSK_DOMAIN_RQUADRATIC_CONE
+jump_set_to_mosek(::Type{MOI.GeometricMeanCone}) =                Mosek.MSK_DOMAIN_PRIMAL_GEO_MEAN_CONE
+jump_set_to_mosek(::Type{MOI.PowerCone}) =                        Mosek.MSK_DOMAIN_PRIMAL_POWER_CONE
+jump_set_to_mosek(::Type{MOI.DualPowerCone}) =                    Mosek.MSK_DOMAIN_DUAL_POWER_CONE
+jump_set_to_mosek(::Type{MOI.ExponentialCone}) =                  Mosek.MSK_DOMAIN_PRIMAL_EXP_CONE
+jump_set_to_mosek(::Type{MOI.DualExponentialCone}) =              Mosek.MSK_DOMAIN_DUAL_EXP_CONE
+jump_set_to_mosek(::Type{MOI.PositiveSemidefiniteConeTriangle}) = Mosek.MSK_DOMAIN_PSD_CONE
+
+function MOI.get(model::MosekModel,
+                 ::MOI.NumberOfConstraints{MOI.VectorAffineFunction{Float64},
+                                           S}) where{S<:ACCUntransformedVectorDomain}
+    n = 0
+    t = jump_set_to_mosek(S)
+    for i in 1:getnumacc(model.task)
+        domidx = getaccdomain(model.task,i)
+        sz = getdomainn(model.task,i)
+        if sz > 0 && t == getdomaintype(model.task,domidx)
+            n += 1
+        end
+    end
+    return n
+end
+
 function MOI.get(model::MosekModel,
                  ::MOI.ListOfConstraintIndices{MOI.VectorOfVariables,
                                                MOI.PositiveSemidefiniteConeTriangle})
@@ -370,7 +401,6 @@ function reorder(x, ::Type{<:Union{MOI.ExponentialCone,
 end
 reorder(x, ::Type{<:VectorCone}) = x
 
-
 # Semidefinite domain for a variable
 function MOI.get!(
     output::Vector{Float64},
@@ -425,6 +455,43 @@ function MOI.get(m     ::MosekModel,
         - m.solutions[attr.N].y[subi]
     end
 end
+
+
+function permute_sol_mosek_to_julia(::Type{D},vals :: Vector{Float64}) where{D<:ACCUntransformedVectorDomain}
+    return vals
+end
+function permute_sol_mosek_to_julia(::Type{D},vals :: Vector{Float64}) where{D<:Union{MOI.ExponentialCone,
+                                                                                      MOI.DualExponentialCone}}
+    return Float64[vals[3],vals[2],vals[1]]
+end
+function permute_sol_mosek_to_julia(::Type{MOI.PositiveSemidefiniteConeTriangle},vals :: Vector{Float64})
+    N = length(vals)
+    res = Vector{Float64}(N)
+    d = MOI.Utilities.side_dimension_for_vectorized_dimension(N)
+    p = 1
+    for j in 1:d
+        for i in j:d
+            res[i*(i+1)÷2] = vals[p]
+            p += 1
+        end
+    end
+    res
+end
+
+function MOI.get(m :: MosekModel,
+                 attr :: MOI.ConstraintDual,
+                 ci ::MOI.ConstraintIndex{MOI.VectorAffineFunction{Float64},D}) where{D<:ACCVectorDomain}
+    accid = Int64(ci.value)
+    permute_sol_mosek_to_julia(D,m.solutions[attr.N].dacc[m.acc_ptr[accid]:m.acc_ptr[accid+1]-1])
+end
+
+function MOI.get(m :: MosekModel,
+                 attr :: MOI.ConstraintPrimal,
+                 ci ::MOI.ConstraintIndex{MOI.VectorAffineFunction{Float64},D}) where{D<:ACCVectorDomain}
+    accid = Int64(ci.value)
+    permute_sol_mosek_to_julia(D,m.solutions[attr.N].pacc[m.acc_ptr[accid]:m.acc_ptr[accid+1]-1])
+end
+
 
 solsize(m::MosekModel, ::MOI.ConstraintIndex{<:MOI.AbstractScalarFunction}) = 1
 function solsize(m::MosekModel, ci::MOI.ConstraintIndex{MOI.VectorOfVariables})
